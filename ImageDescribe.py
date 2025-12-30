@@ -121,53 +121,50 @@ def _strip_userinfo(url: str) -> str:
 		return urlunparse((p.scheme, netloc, p.path, p.params, p.query, p.fragment))
 	return url
 
-def fetch_image_from_camera(cam: dict) -> Image.Image:
+def fetch_image_from_camera(cam: CameraConfig) -> Image.Image:
 	session = requests.session()
 	session.mount("file://", LocalFileAdapter())
 
 	url = cam["url"]
-	safe_url = _strip_userinfo(url)
 
-	auth = None
-	if cam.get("auth_type") == "basic":
-		auth = HTTPBasicAuth(cam.get("username") or "", cam.get("password") or "")
-	elif cam.get("auth_type") == "digest":
-		auth = HTTPDigestAuth(cam.get("username") or "", cam.get("password") or "")
-
-	headers = {
-		"User-Agent": "camera-vision-service/1.0",
-		"Accept": "image/*,*/*;q=0.8",
-	}
 
 	try:
-		# Important: allow redirects, but note some cameras redirect and drop auth.
-		# requests will re-send auth for same host; cross-host redirects will not.
-		resp = session.get(
-			safe_url,
-			stream=True,
-			timeout=10,
-			auth=auth,
-			headers=headers,
-			verify=cam.get("verify_tls", True),
-			allow_redirects=True,
-		)
+		if ( url.startswith("file://")):
+			resp = session.get(url, stream=True)
+		else:
+			safe_url = _strip_userinfo(url)
+			auth = None
+			if cam.get("auth_type") == "basic":
+				auth = HTTPBasicAuth(cam.get("username") or "", cam.get("password") or "")
+			elif cam.get("auth_type") == "digest":
+				auth = HTTPDigestAuth(cam.get("username") or "", cam.get("password") or "")
+			headers = {
+				"User-Agent": "camera-vision-service/1.0",
+				"Accept": "image/*,*/*;q=0.8",
+			}
 
-		# print("Final URL:", resp.url, "Status:", resp.status_code, "WWW-Auth:", resp.headers.get("WWW-Authenticate"))
-
-		resp.raise_for_status()
-
-		# Some cameras return HTML login page with 200; validate content-type.
-		ctype = (resp.headers.get("Content-Type") or "").lower()
-		if "image" not in ctype:
-			raise HTTPException(
-				status_code=400,
-				detail=f"Camera did not return an image. Content-Type={ctype} Status={resp.status_code}",
+			resp = session.get(
+				safe_url,
+				stream=True,
+				timeout=10,
+				auth=auth,
+				headers=headers,
+				verify=cam.get("verify_tls", True),
+				allow_redirects=True,
 			)
+
+			resp.raise_for_status()
+
+			ctype = (resp.headers.get("Content-Type") or "").lower()
+			if "image" not in ctype:
+				raise HTTPException(
+					status_code=400,
+					detail=f"Camera did not return an image. Content-Type={ctype} Status={resp.status_code}",
+				)
 
 		return Image.open(resp.raw).convert("RGB")
 
 	except requests.HTTPError as e:
-		# Surface auth challenges and status codes
 		www = ""
 		try:
 			www = resp.headers.get("WWW-Authenticate", "")
